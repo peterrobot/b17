@@ -1,0 +1,66 @@
+[tool.pyink]
+line-length = 80
+preview = true
+pyink-indentation = 2
+pyink-use-majority-quotes = true
+
+[tool.black]
+line-length = 80
+preview = true
+indentation = 2
+
+[tool.marimo.formatting]
+line-length = 80
+
+[tool.marimo.save]
+autosave_delay = 1000
+autosave = "after_delay"
+format_on_save = true
+
+[tool.marimo.display]
+dataframes = "rich"
+code_editor_font_size = 16
+reference_highlighting = true
+
+[tool.mypy]
+ignore_missing_imports = true
+show_error_codes = true
+disable_error_code = ["annotation-unchecked"]
+
+[tool.ruff]
+include = ["src/**/*.py"]
+exclude = ["build", "dist", "vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "C", "N", "RUF"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/test*.py" = ["F841"]
+
+[tool.pytest]
+log_cli = true
+log_cli_level = "INFO"
+
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+
+[project]
+name = "b17"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    'numpy',
+    'pandas',
+    'scipy',
+    'xarray'
+]
+
+readme = {file="README.md", content-type="text/markdown"}
+
+[tool.setuptools.packages.find]
+where = ['src']
+include = ['b17', 'doc']
