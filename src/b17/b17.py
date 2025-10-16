@@ -14,9 +14,13 @@ def station_stats(datain: np.ndarray) -> tuple[float, int, float, float]:
     x = np.log10(data)
     x_mean = float(np.mean(x))
 
+    # Handle cases with no variance
+    if n < 3:
+        return 0.0, n, 0.0, x_mean
+
     s = np.sqrt((np.sum(x**2) - np.sum(x) ** 2 / n) / (n - 1))
 
-    if s == 0.0:
+    if s == 0.0 or n < 3:
         return 0.0, n, s, x_mean
 
     g = (
@@ -70,16 +74,35 @@ def historical_adjust(H, L, Z, X, Xz):
     Adjusts statistics for historical data/outliers per Appendix 6 of B17B.
     """
     N = len(X)
-    W = (H - Z) / (N + L)
+    # Handle division by zero if N + L is zero
+    if N + L == 0:
+        W = 0
+    else:
+        W = (H - Z) / (N + L)
 
-    Mbar = (W * np.sum(X) + np.sum(Xz)) / (H - W * L)
-    Sbar = np.sqrt(
-        (W * np.sum((X - Mbar) ** 2) + np.sum((Xz - Mbar) ** 2))
-        / (H - W * L - 1)
-    )
-    Gbar = ((H - W * L) / ((H - W * L - 1) * (H - W * L - 2))) * (
-        (W * np.sum((X - Mbar) ** 3) + np.sum((Xz - Mbar) ** 3)) / Sbar**3
-    )
+    # Handle division by zero
+    denominator_m = H - W * L
+    if denominator_m == 0:
+        Mbar = 0
+    else:
+        Mbar = (W * np.sum(X) + np.sum(Xz)) / denominator_m
+
+    denominator_s = H - W * L - 1
+    if denominator_s <= 0:
+        Sbar = 0
+    else:
+        Sbar = np.sqrt(
+            (W * np.sum((X - Mbar) ** 2) + np.sum((Xz - Mbar) ** 2))
+            / denominator_s
+        )
+
+    denominator_g = (H - W * L - 1) * (H - W * L - 2)
+    if denominator_g <= 0 or Sbar == 0:
+        Gbar = 0
+    else:
+        Gbar = ((H - W * L) / denominator_g) * (
+            (W * np.sum((X - Mbar) ** 3) + np.sum((Xz - Mbar) ** 3)) / Sbar**3
+        )
 
     Xh = np.sort(np.concatenate([X, Xz]))[::-1]
     E = np.arange(1, Z + N + 1)
@@ -106,8 +129,6 @@ def b17(
     if gg is None:
         gg = 0.0
 
-    # MODIFIED: Load required tables from NetCDF files using xarray
-    # Using a with statement ensures the files are properly closed.
     with xr.open_dataset("KNtable.nc") as ds:
         kn_table = ds["KNtable"].values
     with xr.open_dataset("ktable.nc") as ds:
@@ -120,62 +141,44 @@ def b17(
     G, N, S, Xmean = station_stats(non_zero_flood)
     skews = [G]
 
-    kn_row_idx = np.argmin(np.abs(kn_table[:, 0] - N))
+    # Use original stats for all outlier threshold calculations
+    G_orig, N_orig, S_orig, Xmean_orig = G, N, S, Xmean
+
+    kn_row_idx = np.argmin(np.abs(kn_table[:, 0] - N_orig))
     kn_val = kn_table[kn_row_idx, 1]
 
-    datafilter = non_zero_flood.copy()
+    # CORRECT IMPLEMENTATION: Calculate BOTH thresholds from ORIGINAL stats first.
+    qh = 10 ** (Xmean_orig + kn_val * S_orig)
+    ql = 10 ** (Xmean_orig - kn_val * S_orig)
 
-    if -0.4 <= G <= 0.4:
-
-        qh = 10 ** (Xmean + kn_val * S)
-        ql = 10 ** (Xmean - kn_val * S)
-
+    if -0.4 <= G_orig <= 0.4:
+        # Filter based on both thresholds
         datafilter = non_zero_flood[
             (non_zero_flood[:, 1] > ql) & (non_zero_flood[:, 1] < qh)
         ]
-
-        QLcnt = np.sum(datain[:, 1] <= ql)
-        QHcnt = np.sum(datain[:, 1] > qh)
-        if QLcnt > 0:
-            G, N, S, Xmean = station_stats(datafilter)
-    elif G > 0.4:
-        qh = 10 ** (Xmean + kn_val * S)
-        datafilter = non_zero_flood[non_zero_flood[:, 1] < qh]
-        QHcnt = np.sum(datain[:, 1] > qh)
-
-        G_temp, N_temp, S_temp, Xmean_temp = station_stats(datafilter)
-        kn_row_idx = np.argmin(np.abs(kn_table[:, 0] - N_temp))
-        kn_val = kn_table[kn_row_idx, 1]
-        ql = 10 ** (Xmean_temp - kn_val * S_temp)
-
-        datafilter = datafilter[datafilter[:, 1] > ql]
-        QLcnt = np.sum(datain[:, 1] <= ql)
-        if QLcnt > 0:
-            G, N, S, Xmean = station_stats(datafilter)
+    elif G_orig > 0.4:
+        # Filter for high first, then low, using the original thresholds
+        datafilter_high = non_zero_flood[non_zero_flood[:, 1] < qh]
+        datafilter = datafilter_high[datafilter_high[:, 1] > ql]
     else:  # G < -0.4
-        # Test for low outliers, recompute, then test for high
-        ql = 10 ** (Xmean - kn_val * S)
-        datafilter = non_zero_flood[non_zero_flood[:, 1] > ql]
-        QLcnt = np.sum(datain[:, 1] <= ql)
+        # Filter for low first, then high, using the original thresholds
+        datafilter_low = non_zero_flood[non_zero_flood[:, 1] > ql]
+        datafilter = datafilter_low[datafilter_low[:, 1] < qh]
 
-        G_temp, N_temp, S_temp, Xmean_temp = station_stats(datafilter)
-        kn_row_idx = np.argmin(np.abs(kn_table[:, 0] - N_temp))
-        kn_val = kn_table[kn_row_idx, 1]
-        qh = 10 ** (Xmean_temp + kn_val * S_temp)
-
-        datafilter = datafilter[datafilter[:, 1] < qh]
-        QHcnt = np.sum(datain[:, 1] > qh)
-        if QLcnt > 0:
-            G, N, S, Xmean = station_stats(datafilter)
+    # Calculate outlier counts using the original thresholds
+    QLcnt = np.sum(datain[:, 1] <= ql)
+    QHcnt = np.sum(datain[:, 1] > qh)
+    if QLcnt > 0 or QHcnt > 0:
+        G, N, S, Xmean = station_stats(datafilter)
 
     skews.append(G)
     Xz = np.log10(datain[datain[:, 1] > qh, 1])
     X = np.log10(datafilter[:, 1])
-    skews.append(G)
 
+    # Historical adjustment uses the filtered data
     G_hist, Mbar, Sbar, hp = historical_adjust(n_total, QLcnt, QHcnt, X, Xz)
     skews.append(G_hist)
-    G = G_hist
+    G = G_hist  # Adopt the historically adjusted skew
 
     if QLcnt > 0:
         Pest = N / n_total
@@ -185,19 +188,15 @@ def b17(
             )
 
         _, flood_freq_temp, _ = freq_curve(Xmean, S, G, ktable)
-
-        # Adjust probabilities
         adj_p = flood_freq_temp[:, 0] * Pest
-
-        # Interpolate to find Q values at standard probabilities
-        interp_func = PchipInterpolator(adj_p, flood_freq_temp[:, 1])
-        adj_freq_log = interp_func(flood_freq_temp[:, 0])
+        interp_func = PchipInterpolator(
+            adj_p, flood_freq_temp[:, 1], extrapolate=True
+        )
 
         Q01 = 10 ** interp_func(0.01)
         Q10 = 10 ** interp_func(0.10)
         Q50 = 10 ** interp_func(0.50)
 
-        # Generate synthetic Log-Pearson statistics
         GS = -2.5 + 3.12 * (np.log10(Q01 / Q10) / np.log10(Q10 / Q50))
         if GS < -2.0 or GS > 2.5:
             print(
@@ -212,10 +211,11 @@ def b17(
         SS = np.log10(Q01 / Q50) / (K01 - K50)
         XS = np.log10(Q50) - K50 * SS
     else:
-        # If no low outliers, use historical stats
-        GS = G_hist
+        # If no low outliers, use historically adjusted stats
+        GS = G_hist  # GS is the station skew in this case
         XS = Mbar
         SS = Sbar
+
     if abs(G - gg) > 0.5:
         print(
             f"Warning: Large discrepancy (> 0.5) between calculated station skew (G = {G:.3f}) and generalized skew (G = {gg:.3f}). More weight should be given to the Station skew."
@@ -225,12 +225,16 @@ def b17(
     A = -0.33 + 0.08 * abs(G) if abs(G) <= 0.90 else -0.52 + 0.30 * abs(G)
     B = 0.94 - 0.26 * abs(G) if abs(G) <= 1.50 else 0.55
     MSEG = 10 ** (A - B * np.log10(n_total / 10))
-    GD = (MSEGbar * G + MSEG * gg) / (MSEGbar + MSEG)
+
+    # FIX 2: Use the synthetic skew GS in the weighting formula
+    GD = (MSEGbar * GS + MSEG * gg) / (MSEGbar + MSEG)
     skews.append(GD)
 
     K_final, finalfreq_log, Gzero = freq_curve(XS, SS, GD, ktable)
 
-    Galpha_k = Gzero[np.isclose(Gzero[:, 1], 0.05), 2][0]
+    Galpha_k_row = Gzero[np.isclose(Gzero[:, 1], 0.05)]
+    Galpha_k = Galpha_k_row[0, 2] if Galpha_k_row.size > 0 else 0
+
     a = 1 - (Galpha_k**2) / (2 * (n_total - 1))
     b = K_final[:, 0] ** 2 - (Galpha_k**2) / n_total
     sqrt_term = np.maximum(0, K_final[:, 0] ** 2 - a * b)
@@ -241,13 +245,6 @@ def b17(
     LQu_log = XS + Ku * SS
     LQl_log = XS + Kl * SS
 
-    """
-    pexp_interp = PchipInterpolator(pn_table[:, 1], pn_table[:, 2])
-    expectedP_log = PchipInterpolator(
-        pexp_interp(finalfreq_log[:, 0]), finalfreq_log[:, 1]
-    )(finalfreq_log[:, 0])
-    """
-
     p_unique = np.unique(pn_table[:, 1])
     pexp_vals = np.zeros(len(p_unique))
 
@@ -255,23 +252,19 @@ def b17(
         mask = pn_table[:, 1] == p_val
         n_vals = pn_table[mask, 0]
         pn_vals = pn_table[mask, 2]
-
         interp_func = PchipInterpolator(n_vals, pn_vals)
         pexp_vals[i] = interp_func(N - 1)
 
     pexp_table = np.vstack((p_unique, pexp_vals)).T
 
-    # Find intersection and interpolate
-    common_probs = np.intersect1d(pexp_table[:, 0], finalfreq_log[:, 0])
-    if len(common_probs) > 0:
-        mask_pexp = np.isin(pexp_table[:, 0], common_probs)
-        mask_freq = np.isin(finalfreq_log[:, 0], common_probs)
-
+    common_probs, ia, ib = np.intersect1d(
+        pexp_table[:, 0], finalfreq_log[:, 0], return_indices=True
+    )
+    if len(common_probs) > 1:
         interp_func = PchipInterpolator(
-            pexp_table[mask_pexp, 1], finalfreq_log[mask_freq, 1]
+            pexp_table[ia, 1], finalfreq_log[ib, 1], extrapolate=True
         )
         expectedP_log = interp_func(finalfreq_log[:, 0])
-
         expectedP_log[finalfreq_log[:, 0] < 0.002] = np.nan
     else:
         expectedP_log = np.full_like(finalfreq_log[:, 1], np.nan)
@@ -291,26 +284,3 @@ def b17(
     pp = plot_pos(non_zero_flood, n_total)
 
     return dataout, skews, pp, XS, SS, hp
-
-
-if __name__ == "__main__":
-    try:
-        # MODIFIED: Load example data from NetCDF using xarray
-        with xr.open_dataset("examples.nc") as ds:
-            examples = ds["examples"].values
-
-        ex1_mask = ~np.isnan(examples[:, 1])
-        ex1_data = examples[ex1_mask][:, [0, 1]]
-
-        b17(
-            ex1_data,
-            gg=0.590537,
-            imgfile="b17_python_xarray_plot.png",
-        )
-
-    except FileNotFoundError:
-        print(
-            "\nCould not find 'examples.nc'. Please run the conversion script first."
-        )
-    except Exception as e:
-        print(f"\nAn error occurred during the example run: {e}")
