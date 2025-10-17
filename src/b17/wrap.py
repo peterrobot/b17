@@ -12,6 +12,33 @@ from b17.b17_imp import b17, extract_ret_df
 
 
 def load_src_df(src_file: Path, convert_cfs: bool = True) -> pd.DataFrame:
+    """Load and preprocess source peak flow data from USGS files.
+
+    This function reads USGS peak flow data files, parses relevant columns,
+    converts dates, and optionally converts discharge units from CFS to CMS.
+
+    Args:
+        src_file: Path to the USGS peak flow data file (.txt format).
+        convert_cfs: Whether to convert discharge from cubic feet per second (CFS) to cubic meters per second (CMS). Defaults to True.
+
+    Returns:
+        pd.DataFrame: Processed DataFrame containing:
+            - agency_cd: Agency code
+            - site_no: Site number (basin ID)
+            - peak_dt: Peak flow date as datetime
+            - peak_va: Peak flow value (in CFS or CMS)
+
+    Raises:
+        FileNotFoundError: If src_file does not exist.
+        pd.errors.EmptyDataError: If the file is empty or malformed.
+
+    Example:
+        >>> df = load_src_df(
+        ...     src_file=Path("data/peaks/01013500.txt"),
+        ...     convert_cfs=True
+        ... )
+        >>> print(df.head())
+    """
     df = pd.read_csv(src_file, header=72, sep="\t").iloc[1:][
         ["agency_cd", "site_no", "peak_dt", "peak_va"]
     ]
@@ -32,6 +59,39 @@ def single_basin_b17(
     convert_cfs: bool = True,
     is_override: bool = False,
 ) -> tuple[Path, Path]:
+    """Calculate B17 flood frequency analysis for a single basin.
+
+    This function performs B17 flood frequency analysis on peak flow data
+    for a hydrological basin, extracts discharge values for a target return
+    period, and saves the results to CSV files.
+
+    Args:
+        basin_id: Unique identifier for the basin to analyze.
+        src_path: Path to source directory containing basin data files.
+        trg_path: Path to target directory where results will be saved.
+        target_return_year: Return period in years for which to extract discharge.
+        convert_cfs: Whether to convert discharge from CFS to CMS. Defaults to True.
+        is_override: Whether to override existing results. Defaults to False.
+
+    Returns:
+        tuple[Path, Path]: A tuple containing paths to:
+            - Return period analysis results CSV file
+            - Selected peak flow events CSV file
+
+    Raises:
+        FileNotFoundError: If source data file for the basin is not found.
+        ValueError: If target_return_year is not found in return period analysis.
+
+    Example:
+        >>> ret_path, sel_path = single_basin_b17(
+        ...     basin_id="01013500",
+        ...     src_path=Path("data/peaks"),
+        ...     trg_path=Path("results/b17"),
+        ...     target_return_year=100.0,
+        ...     convert_cfs=True,
+        ...     is_override=False
+        ... )
+    """
     ret_path = trg_path / f"Sample_{basin_id}.csv"
     sel_src_path = trg_path / f"Selected_{basin_id}.csv"
 
@@ -67,7 +127,37 @@ def wrap_b17(
     target_return_year: float,
     convert_cfs: bool = True,
     is_override: bool = False,
-):
+) -> tuple[Path, Path] | tuple[str, str]:
+    """Wrapper function for B17 flood frequency analysis with error handling.
+
+    This function wraps the single_basin_b17 function and provides comprehensive
+    error handling to ensure individual basin failures don't affect batch processing.
+
+    Args:
+        basin_id: Unique identifier for the basin to analyze.
+        src_path: Path to source directory containing basin data files.
+        trg_path: Path to target directory where results will be saved.
+        target_return_year: Return period in years for which to extract discharge.
+        convert_cfs: Whether to convert discharge from CFS to CMS. Defaults to True.
+        is_override: Whether to override existing results. Defaults to False.
+
+    Returns:
+        tuple[Path, Path] | tuple[str, str]:
+            - If successful: tuple of paths to return period results and selected events CSV files
+            - If failed: tuple containing basin_id and error traceback string
+
+    Example:
+        >>> result = wrap_b17(
+        ...     basin_id="01013500",
+        ...     src_path=Path("data/peaks"),
+        ...     trg_path=Path("results/b17"),
+        ...     target_return_year=100.0
+        ... )
+        >>> if isinstance(result[0], Path):
+        ...     print(f"Success: {result[0]}")
+        ... else:
+        ...     print(f"Failed: {result[0]} - {result[1]}")
+    """
     try:
         return single_basin_b17(
             basin_id=basin_id,
@@ -94,6 +184,33 @@ def batch_save_df(
     is_override: bool = False,
     n_processes: int | None = None,
 ):
+    """Process multiple basins in parallel using B17 flood frequency analysis.
+
+    This function performs batch processing of multiple basins using multiprocessing
+    to calculate B17 flood frequency analysis and save results to CSV files.
+
+    Args:
+        basin_list: List of basin IDs to process.
+        src_path: Path to source directory containing basin data files.
+        trg_path: Path to target directory where results will be saved.
+        target_return_year: Return period in years for which to extract discharge.
+        convert_cfs: Whether to convert discharge from CFS to CMS. Defaults to True.
+        is_override: Whether to override existing results. Defaults to False.
+        n_processes: Number of parallel processes to use. If None, uses all available CPUs.
+
+    Raises:
+        AssertionError: If src_path does not exist or is not a directory.
+        FileNotFoundError: If source data files are not found for any basin.
+
+    Example:
+        >>> batch_save_df(
+        ...     basin_list=["01013500", "01022500", "01031500"],
+        ...     src_path=Path("data/peaks"),
+        ...     trg_path=Path("results/b17"),
+        ...     target_return_year=100.0,
+        ...     n_processes=4
+        ... )
+    """
     assert src_path.exists() and src_path.is_dir()
 
     trg_path.mkdir(parents=True, exist_ok=True)
