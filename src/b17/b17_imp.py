@@ -387,7 +387,7 @@ def extract_ret_df(ret, is_format: bool = True) -> pd.DataFrame:
         columns=[
             "Return Period",
             "Probability",
-            "Dischage",
+            "Discharge",
             "Upper 95%",
             "Lower 95%",
             "Expect Probability Flow",
@@ -395,7 +395,7 @@ def extract_ret_df(ret, is_format: bool = True) -> pd.DataFrame:
     )
 
     data_name = [
-        "Dischage",
+        "Discharge",
         "Upper 95%",
         "Lower 95%",
         "Expect Probability Flow",
