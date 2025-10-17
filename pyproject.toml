@@ -56,10 +56,17 @@ dependencies = [
     'numpy',
     'pandas',
     'scipy',
-    'xarray'
+    'xarray',
+    'h5netcdf',
 ]
 
 readme = {file="README.md", content-type="text/markdown"}
+
+[project.optional-dependencies]
+wrap = [
+    'tqdm',
+    'loguru'
+]
 
 [tool.setuptools.packages.find]
 where = ['src']
